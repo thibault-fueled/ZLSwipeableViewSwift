@@ -13,15 +13,15 @@ class ViewManager : NSObject {
 	// Snapping -> [Moving]+ -> Snapping
 	// Snapping -> [Moving]+ -> Swiping -> Snapping
 	enum State {
-		case snapping(CGPoint), moving(CGPoint), swiping(CGPoint, CGVector)
+		case snapping(CGPoint), moving(CGPoint), swiping(CGPoint, CGVector), swipingBack()
 	}
 	
 	var state: State {
 		didSet {
-			if case .snapping(_) = oldValue,  case let .moving(point) = state {
+			if case .snapping(_) = oldValue, case let .moving(point) = state {
 				unsnapView()
 				attachView(toPoint: point)
-			} else if case .snapping(_) = oldValue,  case let .swiping(origin, direction) = state {
+			} else if case .snapping(_) = oldValue, case let .swiping(origin, direction) = state {
 				unsnapView()
 				attachView(toPoint: origin)
 				pushView(fromPoint: origin, inDirection: direction)
@@ -123,23 +123,36 @@ class ViewManager : NSObject {
 		switch recognizer.state {
 		case .began:
 			guard case .snapping(_) = state else { return }
-			state = .moving(location)
-			swipeableView.didStart?(view, location)
+			let directionVector = CGVector(point: translation.normalized * max(velocity.magnitude, swipeableView.minVelocityInPointPerSecond))
+			if directionVector.dx > 0 || directionVector.dy < 0 {
+				state = .moving(location)
+				swipeableView.didStart?(view, location)
+			} else {
+				state = .swipingBack()
+			}
 		case .changed:
 			guard case .moving(_) = state else { return }
 			state = .moving(location)
 			swipeableView.swiping?(view, location, translation)
 		case .ended, .cancelled:
-			guard case .moving(_) = state else { return }
-			if swipeableView.shouldSwipeView(view, movement, swipeableView) {
-				let directionVector = CGVector(point: translation.normalized * max(velocity.magnitude, swipeableView.minVelocityInPointPerSecond))
-				state = .swiping(location, directionVector)
-				swipeableView.swipeView(view, location: location, directionVector: directionVector)
-			} else {
+			switch state {
+			case .moving(_) :
+				if swipeableView.shouldSwipeView(view, movement, swipeableView) {
+					let directionVector = CGVector(point: translation.normalized * max(velocity.magnitude, swipeableView.minVelocityInPointPerSecond))
+					state = .swiping(location, directionVector)
+					swipeableView.swipeView(view, location: location, directionVector: directionVector)
+				} else {
+					state = snappingStateAtContainerCenter()
+					swipeableView.didCancel?(view)
+				}
+				swipeableView.didEnd?(view, location)
+			case .swipingBack() :
 				state = snappingStateAtContainerCenter()
-				swipeableView.didCancel?(view)
+				swipeableView.shouldRewind?(view)
+				swipeableView.didEnd?(view, location)
+			default:
+				return
 			}
-			swipeableView.didEnd?(view, location)
 		default:
 			break
 		}
